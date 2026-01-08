@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Precious Time Cinema - Parent Mode</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide-static@0.321.0/lib/lucide.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: black; }
+        .custom-range::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            background: #22d3ee;
+            cursor: pointer;
+            border-radius: 50%;
+            border: 4px solid #000;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/javascript">
+        const { useState, useEffect, useMemo } = React;
+
+        const apiKey = TMDB_API; // The environment provides this key at runtime
+
+        const PLATFORMS = [
+            { id: 8, name: "Netflix" },
+            { id: 15, name: "Hulu" },
+            { id: 9, name: "Prime" },
+            { id: 337, name: "Disney+" },
+            { id: 1899, name: "Max" },
+            { id: 531, name: "Paramount+" },
+            { id: 350, name: "Apple TV" }
+        ];
+
+        const GENRES = [
+            { id: 0, name: "All" },
+            { id: 28, name: "Action" },
+            { id: 35, name: "Comedy" },
+            { id: 18, name: "Drama" },
+            { id: 27, name: "Horror" },
+            { id: 878, name: "Sci-Fi" },
+            { id: 53, name: "Thriller" },
+            { id: 99, name: "Documentary" }
+        ];
+
+        function App() {
+            const [maxTime, setMaxTime] = useState(100);
+            const [selectedGenre, setSelectedGenre] = useState(0);
+            const [userPlatforms, setUserPlatforms] = useState([8, 15, 9]);
+            const [showFilters, setShowFilters] = useState(false);
+            const [movies, setMovies] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+
+            const fetchMovies = async (retryCount = 0) => {
+                try {
+                    setLoading(true);
+                    setError(null);
+                    
+                    const url = `https://api.themoviedb.org/3/trending/movie/week?api_key=${apiKey}&page=1`;
+                    const response = await fetch(url);
+                    
+                    if (!response.ok) throw new Error('Failed to fetch');
+                    const data = await response.json();
+                    
+                    const detailedMovies = await Promise.all(
+                        data.results.slice(0, 18).map(async (m) => {
+                            try {
+                                const detailUrl = `https://api.themoviedb.org/3/movie/${m.id}?api_key=${apiKey}&append_to_response=watch/providers`;
+                                const detailRes = await fetch(detailUrl);
+                                const detailData = await detailRes.json();
+                                
+                                return {
+                                    id: m.id,
+                                    title: m.title,
+                                    runtime: detailData.runtime || 0,
+                                    genreIds: detailData.genres?.map(g => g.id) || [],
+                                    platforms: detailData['watch/providers']?.results?.US?.flatrate?.map(p => p.provider_id) || [],
+                                    rating: m.vote_average.toFixed(1),
+                                    year: m.release_date ? new Date(m.release_date).getFullYear() : 'N/A',
+                                    description: m.overview,
+                                    poster: m.poster_path ? `https://image.tmdb.org/t/p/w500${m.poster_path}` : null,
+                                    backdrop: m.backdrop_path ? `https://image.tmdb.org/t/p/w1280${m.backdrop_path}` : null
+                                };
+                            } catch (e) { return null; }
+                        })
+                    );
+
+                    setMovies(detailedMovies.filter(m => m !== null));
+                    setLoading(false);
+                } catch (err) {
+                    if (retryCount < 5) {
+                        setTimeout(() => fetchMovies(retryCount + 1), Math.pow(2, retryCount) * 1000);
+                    } else {
+                        setError("Connection issues. Please check your internet or API key.");
+                        setLoading(false);
+                    }
+                }
+            };
+
+            useEffect(() => { fetchMovies(); }, []);
+
+            const filteredMovies = useMemo(() => {
+                return movies.filter(movie => {
+                    const timeMatch = movie.runtime > 0 && movie.runtime <= maxTime;
+                    const genreMatch = selectedGenre === 0 || movie.genreIds.includes(selectedGenre);
+                    const platformMatch = movie.platforms.length === 0 || movie.platforms.some(p => userPlatforms.includes(p));
+                    return timeMatch && genreMatch && platformMatch;
+                }).sort((a, b) => b.rating - a.rating);
+            }, [maxTime, selectedGenre, userPlatforms, movies]);
+
+            return React.createElement('div', { className: "min-h-screen bg-black text-white p-4 md:p-10" }, [
+                // Background effects
+                React.createElement('div', { key: 'bg', className: "fixed inset-0 overflow-hidden pointer-events-none -z-10" }, [
+                    React.createElement('div', { className: "absolute -top-1/4 -left-1/4 w-1/2 h-1/2 bg-indigo-900/20 blur-[120px] rounded-full" }),
+                    React.createElement('div', { className: "absolute top-1/2 -right-1/4 w-1/2 h-1/2 bg-cyan-900/10 blur-[120px] rounded-full" })
+                ]),
+
+                // Header
+                React.createElement('header', { key: 'header', className: "max-w-6xl mx-auto flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12" }, [
+                    React.createElement('div', null, [
+                        React.createElement('div', { className: "flex items-center gap-2 mb-2" }, [
+                            React.createElement('span', { className: "bg-cyan-500 text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest" }, "Parent Mode"),
+                            React.createElement('span', { className: "text-neutral-500 text-[10px] font-bold uppercase tracking-widest" }, "✦ Live Updates")
+                        ]),
+                        React.createElement('h1', { className: "text-4xl md:text-5xl font-black tracking-tight" }, [
+                            "Precious ", React.createElement('span', { className: "text-cyan-400" }, "Time"), " Cinema"
+                        ]),
+                        React.createElement('p', { className: "text-neutral-400 mt-2 text-lg" }, "Your nightly window is small. Let's not waste it.")
+                    ]),
+                    React.createElement('button', { 
+                        onClick: () => setShowFilters(!showFilters),
+                        className: `px-6 py-3 rounded-full border font-bold transition-all ${showFilters ? "bg-white text-black border-white" : "bg-neutral-900 text-white border-neutral-800"}`
+                    }, "Manage Services")
+                ]),
+
+                // Filters Overlay
+                showFilters && React.createElement('div', { key: 'platform-filter', className: "max-w-6xl mx-auto mb-10 p-8 rounded-3xl bg-neutral-900/50 border border-neutral-800 backdrop-blur-md" }, [
+                    React.createElement('h3', { className: "font-bold text-xl mb-6" }, "Streaming Services"),
+                    React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3" }, PLATFORMS.map(p => 
+                        React.createElement('button', {
+                            key: p.id,
+                            onClick: () => setUserPlatforms(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]),
+                            className: `p-4 rounded-2xl border text-xs font-bold transition-all ${userPlatforms.includes(p.id) ? "bg-cyan-500/10 border-cyan-500 text-cyan-400" : "bg-neutral-900 border-neutral-800 text-neutral-500"}`
+                        }, p.name)
+                    ))
+                ]),
+
+                // Controls
+                React.createElement('div', { key: 'controls', className: "max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 mb-16" }, [
+                    React.createElement('div', { className: "lg:col-span-2 bg-neutral-900/40 border border-neutral-800 rounded-3xl p-8" }, [
+                        React.createElement('div', { className: "flex justify-between items-center mb-8" }, [
+                            React.createElement('div', null, [
+                                React.createElement('h3', { className: "text-xs font-bold text-neutral-500 uppercase tracking-widest mb-1" }, "Time Budget"),
+                                React.createElement('p', { className: "text-2xl font-bold" }, `⏱ ${maxTime} Minutes Available`)
+                            ]),
+                            React.createElement('div', { className: "text-right" }, [
+                                React.createElement('span', { className: "block text-[10px] font-bold text-neutral-500 uppercase" }, "Bedtime Target"),
+                                React.createElement('span', { className: "text-sm font-mono text-cyan-500/80" }, new Date(Date.now() + maxTime * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+                            ])
+                        ]),
+                        React.createElement('input', {
+                            type: 'range', min: 70, max: 180, step: 5, value: maxTime,
+                            onChange: (e) => setMaxTime(parseInt(e.target.value)),
+                            className: "w-full h-3 bg-neutral-800 rounded-full appearance-none cursor-pointer custom-range"
+                        })
+                    ]),
+                    React.createElement('div', { className: "bg-neutral-900/40 border border-neutral-800 rounded-3xl p-8" }, [
+                        React.createElement('h3', { className: "text-xs font-bold text-neutral-500 uppercase tracking-widest mb-4" }, "Mood"),
+                        React.createElement('div', { className: "flex flex-wrap gap-2" }, GENRES.map(g => 
+                            React.createElement('button', {
+                                key: g.id,
+                                onClick: () => setSelectedGenre(g.id),
+                                className: `px-4 py-2 rounded-xl text-sm font-bold transition-all ${selectedGenre === g.id ? "bg-cyan-500 text-black" : "bg-neutral-800 text-neutral-400"}`
+                            }, g.name)
+                        ))
+                    ])
+                ]),
+
+                // Grid
+                React.createElement('div', { key: 'grid', className: "max-w-6xl mx-auto" }, [
+                    loading ? React.createElement('div', { className: "text-center py-20 text-neutral-500" }, "Syncing with catalogs...") :
+                    error ? React.createElement('div', { className: "text-center py-20 text-red-400" }, error) :
+                    React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6" }, filteredMovies.map(movie => 
+                        React.createElement('div', { key: movie.id, className: "flex flex-col bg-neutral-900 rounded-3xl overflow-hidden border border-neutral-800 hover:border-cyan-500/50 transition-all group" }, [
+                            React.createElement('div', { className: "relative h-48 overflow-hidden" }, [
+                                React.createElement('img', { src: movie.backdrop || movie.poster, className: "w-full h-full object-cover transition-transform group-hover:scale-110" }),
+                                React.createElement('div', { className: "absolute inset-0 bg-gradient-to-t from-neutral-900" }),
+                                React.createElement('span', { className: "absolute top-4 left-4 bg-black/80 px-2 py-1 rounded text-[10px] font-bold" }, `${movie.runtime}m`),
+                                React.createElement('h3', { className: "absolute bottom-4 left-4 right-4 text-xl font-black" }, movie.title)
+                            ]),
+                            React.createElement('div', { className: "p-6 flex-grow flex flex-col" }, [
+                                React.createElement('div', { className: "flex justify-between mb-4 text-xs font-bold" }, [
+                                    React.createElement('span', { className: "text-yellow-500" }, `⭐ ${movie.rating}`),
+                                    React.createElement('span', { className: "text-neutral-500" }, movie.year)
+                                ]),
+                                React.createElement('p', { className: "text-neutral-400 text-sm line-clamp-3 mb-6" }, movie.description),
+                                React.createElement('button', { className: "mt-auto text-xs font-black text-white hover:text-cyan-400 text-left" }, "VIEW DETAILS →")
+                            ])
+                        ])
+                    ))
+                ])
+            ]);
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
