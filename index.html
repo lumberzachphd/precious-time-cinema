@@ -10,7 +10,17 @@
     <script src="https://cdn.jsdelivr.net/npm/lucide-static@0.321.0/lib/lucide.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; background-color: black; }
+        body { font-family: 'Inter', sans-serif; background-color: black; color: white; }
+        
+        /* Smooth scrolling for the whole page */
+        html { scroll-behavior: smooth; }
+
+        /* Custom scrollbar for a premium look */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #000; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #444; }
+
         .custom-range::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
@@ -20,16 +30,21 @@
             cursor: pointer;
             border-radius: 50%;
             border: 4px solid #000;
+            box-shadow: 0 0 15px rgba(34, 211, 238, 0.4);
         }
+        
+        .movie-card { transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.2s; }
+        .movie-card:hover { transform: translateY(-8px); }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/javascript">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useCallback } = React;
 
-        const apiKey = "596a0c391f0dbb0641e881ceb9994976"; // The environment provides this key at runtime
+        // PASTE YOUR TMDB API KEY BETWEEN THE QUOTES BELOW
+        const apiKey = "596a0c391f0dbb0641e881ceb9994976"; 
 
         const PLATFORMS = [
             { id: 8, name: "Netflix" },
@@ -49,42 +64,66 @@
             { id: 27, name: "Horror" },
             { id: 878, name: "Sci-Fi" },
             { id: 53, name: "Thriller" },
-            { id: 99, name: "Documentary" }
+            { id: 99, name: "Documentary" },
+            { id: 12, name: "Adventure" },
+            { id: 16, name: "Animation" }
         ];
 
         function App() {
             const [maxTime, setMaxTime] = useState(100);
             const [selectedGenre, setSelectedGenre] = useState(0);
-            const [userPlatforms, setUserPlatforms] = useState([8, 15, 9]);
+            const [userPlatforms, setUserPlatforms] = useState([8, 15, 9, 337, 1899]);
             const [showFilters, setShowFilters] = useState(false);
             const [movies, setMovies] = useState([]);
+            const [page, setPage] = useState(1);
             const [loading, setLoading] = useState(true);
+            const [loadingMore, setLoadingMore] = useState(false);
             const [error, setError] = useState(null);
 
-            const fetchMovies = async (retryCount = 0) => {
+            // Using Discover API instead of Trending to get thousands of results
+            const fetchMovies = useCallback(async (pageNum = 1, append = false) => {
+                if (!apiKey) {
+                    setError("API Key Missing. Please add your TMDB API key to the code.");
+                    setLoading(false);
+                    return;
+                }
+
                 try {
-                    setLoading(true);
-                    setError(null);
+                    if (append) setLoadingMore(true); else setLoading(true);
                     
-                    const url = `https://api.themoviedb.org/3/trending/movie/week?api_key=${apiKey}&page=1`;
-                    const response = await fetch(url);
+                    // We fetch from /discover to allow filtering by runtime and rating directly on the server
+                    // This allows us to access the deep catalog (thousands of movies)
+                    const baseUrl = `https://api.themoviedb.org/3/discover/movie?api_key=${apiKey}`;
+                    const params = [
+                        `page=${pageNum}`,
+                        `with_runtime.lte=${maxTime}`,
+                        `with_runtime.gte=60`, // Ignore very short clips
+                        `vote_count.gte=100`,  // Quality filter: only movies people actually watched
+                        `sort_by=popularity.desc`,
+                        `watch_region=US`,
+                        `with_watch_monetization_types=flatrate`
+                    ];
+
+                    if (selectedGenre !== 0) params.push(`with_genres=${selectedGenre}`);
                     
-                    if (!response.ok) throw new Error('Failed to fetch');
+                    const response = await fetch(`${baseUrl}&${params.join('&')}`);
+                    if (!response.ok) throw new Error('Failed to fetch catalog');
                     const data = await response.json();
                     
+                    // Fetch details for each to get provider info (streaming services)
                     const detailedMovies = await Promise.all(
-                        data.results.slice(0, 18).map(async (m) => {
+                        data.results.map(async (m) => {
                             try {
                                 const detailUrl = `https://api.themoviedb.org/3/movie/${m.id}?api_key=${apiKey}&append_to_response=watch/providers`;
                                 const detailRes = await fetch(detailUrl);
-                                const detailData = await detailRes.json();
+                                const d = await detailRes.json();
                                 
                                 return {
                                     id: m.id,
                                     title: m.title,
-                                    runtime: detailData.runtime || 0,
-                                    genreIds: detailData.genres?.map(g => g.id) || [],
-                                    platforms: detailData['watch/providers']?.results?.US?.flatrate?.map(p => p.provider_id) || [],
+                                    runtime: d.runtime || 0,
+                                    genreIds: d.genres?.map(g => g.id) || [],
+                                    platforms: d['watch/providers']?.results?.US?.flatrate?.map(p => p.provider_id) || [],
                                     rating: m.vote_average.toFixed(1),
                                     year: m.release_date ? new Date(m.release_date).getFullYear() : 'N/A',
                                     description: m.overview,
@@ -95,119 +134,184 @@
                         })
                     );
 
-                    setMovies(detailedMovies.filter(m => m !== null));
+                    const validMovies = detailedMovies.filter(m => m !== null);
+                    
+                    setMovies(prev => append ? [...prev, ...validMovies] : validMovies);
                     setLoading(false);
+                    setLoadingMore(false);
                 } catch (err) {
-                    if (retryCount < 5) {
-                        setTimeout(() => fetchMovies(retryCount + 1), Math.pow(2, retryCount) * 1000);
-                    } else {
-                        setError("Connection issues. Please check your internet or API key.");
-                        setLoading(false);
-                    }
+                    setError("Could not load library. Check your API key or internet.");
+                    setLoading(false);
+                    setLoadingMore(false);
                 }
+            }, [maxTime, selectedGenre, apiKey]);
+
+            // Reset and fetch when core filters change
+            useEffect(() => {
+                setPage(1);
+                fetchMovies(1, false);
+            }, [maxTime, selectedGenre, fetchMovies]);
+
+            // Load more movies
+            const handleLoadMore = () => {
+                const nextPage = page + 1;
+                setPage(nextPage);
+                fetchMovies(nextPage, true);
             };
 
-            useEffect(() => { fetchMovies(); }, []);
-
-            const filteredMovies = useMemo(() => {
+            const filteredByPlatform = useMemo(() => {
+                // If user has managed their services, filter the current pool
                 return movies.filter(movie => {
-                    const timeMatch = movie.runtime > 0 && movie.runtime <= maxTime;
-                    const genreMatch = selectedGenre === 0 || movie.genreIds.includes(selectedGenre);
-                    const platformMatch = movie.platforms.length === 0 || movie.platforms.some(p => userPlatforms.includes(p));
-                    return timeMatch && genreMatch && platformMatch;
-                }).sort((a, b) => b.rating - a.rating);
-            }, [maxTime, selectedGenre, userPlatforms, movies]);
+                    if (movie.platforms.length === 0) return true; // Show if provider info is missing
+                    return movie.platforms.some(p => userPlatforms.includes(p));
+                });
+            }, [movies, userPlatforms]);
 
-            return React.createElement('div', { className: "min-h-screen bg-black text-white p-4 md:p-10" }, [
-                // Background effects
+            return React.createElement('div', { className: "min-h-screen pb-20" }, [
+                // Background Glow
                 React.createElement('div', { key: 'bg', className: "fixed inset-0 overflow-hidden pointer-events-none -z-10" }, [
-                    React.createElement('div', { className: "absolute -top-1/4 -left-1/4 w-1/2 h-1/2 bg-indigo-900/20 blur-[120px] rounded-full" }),
-                    React.createElement('div', { className: "absolute top-1/2 -right-1/4 w-1/2 h-1/2 bg-cyan-900/10 blur-[120px] rounded-full" })
+                    React.createElement('div', { className: "absolute -top-1/4 -left-1/4 w-1/2 h-1/2 bg-indigo-900/10 blur-[150px] rounded-full" }),
+                    React.createElement('div', { className: "absolute bottom-0 right-0 w-1/2 h-1/2 bg-cyan-900/10 blur-[150px] rounded-full" })
                 ]),
 
-                // Header
-                React.createElement('header', { key: 'header', className: "max-w-6xl mx-auto flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12" }, [
-                    React.createElement('div', null, [
-                        React.createElement('div', { className: "flex items-center gap-2 mb-2" }, [
-                            React.createElement('span', { className: "bg-cyan-500 text-black px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest" }, "Parent Mode"),
-                            React.createElement('span', { className: "text-neutral-500 text-[10px] font-bold uppercase tracking-widest" }, "✦ Live Updates")
-                        ]),
-                        React.createElement('h1', { className: "text-4xl md:text-5xl font-black tracking-tight" }, [
-                            "Precious ", React.createElement('span', { className: "text-cyan-400" }, "Time"), " Cinema"
-                        ]),
-                        React.createElement('p', { className: "text-neutral-400 mt-2 text-lg" }, "Your nightly window is small. Let's not waste it.")
-                    ]),
-                    React.createElement('button', { 
-                        onClick: () => setShowFilters(!showFilters),
-                        className: `px-6 py-3 rounded-full border font-bold transition-all ${showFilters ? "bg-white text-black border-white" : "bg-neutral-900 text-white border-neutral-800"}`
-                    }, "Manage Services")
-                ]),
-
-                // Filters Overlay
-                showFilters && React.createElement('div', { key: 'platform-filter', className: "max-w-6xl mx-auto mb-10 p-8 rounded-3xl bg-neutral-900/50 border border-neutral-800 backdrop-blur-md" }, [
-                    React.createElement('h3', { className: "font-bold text-xl mb-6" }, "Streaming Services"),
-                    React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3" }, PLATFORMS.map(p => 
-                        React.createElement('button', {
-                            key: p.id,
-                            onClick: () => setUserPlatforms(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]),
-                            className: `p-4 rounded-2xl border text-xs font-bold transition-all ${userPlatforms.includes(p.id) ? "bg-cyan-500/10 border-cyan-500 text-cyan-400" : "bg-neutral-900 border-neutral-800 text-neutral-500"}`
-                        }, p.name)
-                    ))
-                ]),
-
-                // Controls
-                React.createElement('div', { key: 'controls', className: "max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 mb-16" }, [
-                    React.createElement('div', { className: "lg:col-span-2 bg-neutral-900/40 border border-neutral-800 rounded-3xl p-8" }, [
-                        React.createElement('div', { className: "flex justify-between items-center mb-8" }, [
-                            React.createElement('div', null, [
-                                React.createElement('h3', { className: "text-xs font-bold text-neutral-500 uppercase tracking-widest mb-1" }, "Time Budget"),
-                                React.createElement('p', { className: "text-2xl font-bold" }, `⏱ ${maxTime} Minutes Available`)
+                // Header & Hero
+                React.createElement('header', { key: 'header', className: "max-w-7xl mx-auto px-4 pt-10 md:pt-16 mb-12" }, [
+                    React.createElement('div', { className: "flex flex-col md:flex-row md:items-end justify-between gap-8" }, [
+                        React.createElement('div', null, [
+                            React.createElement('div', { className: "flex items-center gap-3 mb-4" }, [
+                                React.createElement('span', { className: "bg-cyan-500 text-black px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest" }, "Parent Mode Active"),
+                                React.createElement('span', { className: "text-neutral-500 text-[10px] font-bold uppercase tracking-widest" }, "✦ Massive Catalog Enabled")
                             ]),
-                            React.createElement('div', { className: "text-right" }, [
-                                React.createElement('span', { className: "block text-[10px] font-bold text-neutral-500 uppercase" }, "Bedtime Target"),
-                                React.createElement('span', { className: "text-sm font-mono text-cyan-500/80" }, new Date(Date.now() + maxTime * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
-                            ])
+                            React.createElement('h1', { className: "text-5xl md:text-7xl font-black tracking-tighter mb-4" }, [
+                                "Precious ", React.createElement('span', { className: "text-cyan-400" }, "Time")
+                            ]),
+                            React.createElement('p', { className: "text-neutral-400 text-xl max-w-xl leading-relaxed" }, 
+                                "Stop scrolling for hours. Tell us your bedtime, we'll find the movie."
+                            )
                         ]),
-                        React.createElement('input', {
-                            type: 'range', min: 70, max: 180, step: 5, value: maxTime,
-                            onChange: (e) => setMaxTime(parseInt(e.target.value)),
-                            className: "w-full h-3 bg-neutral-800 rounded-full appearance-none cursor-pointer custom-range"
-                        })
-                    ]),
-                    React.createElement('div', { className: "bg-neutral-900/40 border border-neutral-800 rounded-3xl p-8" }, [
-                        React.createElement('h3', { className: "text-xs font-bold text-neutral-500 uppercase tracking-widest mb-4" }, "Mood"),
-                        React.createElement('div', { className: "flex flex-wrap gap-2" }, GENRES.map(g => 
+                        React.createElement('button', { 
+                            onClick: () => setShowFilters(!showFilters),
+                            className: `group flex items-center gap-2 px-8 py-4 rounded-2xl border-2 font-black transition-all ${showFilters ? "bg-white text-black border-white" : "bg-transparent text-white border-neutral-800 hover:border-cyan-500"}`
+                        }, [
+                            "MY SERVICES",
+                            React.createElement('span', { className: "opacity-50 group-hover:translate-x-1 transition-transform" }, "→")
+                        ])
+                    ])
+                ]),
+
+                // Platform Filters
+                showFilters && React.createElement('div', { key: 'platform-overlay', className: "max-w-7xl mx-auto px-4 mb-12 animate-in fade-in slide-in-from-top-4" }, [
+                    React.createElement('div', { className: "p-8 rounded-3xl bg-neutral-900/80 border border-neutral-800 backdrop-blur-xl" }, [
+                        React.createElement('h3', { className: "font-bold text-xl mb-6 flex items-center gap-2" }, "Which services do you have?"),
+                        React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-4" }, PLATFORMS.map(p => 
                             React.createElement('button', {
-                                key: g.id,
-                                onClick: () => setSelectedGenre(g.id),
-                                className: `px-4 py-2 rounded-xl text-sm font-bold transition-all ${selectedGenre === g.id ? "bg-cyan-500 text-black" : "bg-neutral-800 text-neutral-400"}`
-                            }, g.name)
+                                key: p.id,
+                                onClick: () => setUserPlatforms(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]),
+                                className: `flex flex-col items-center gap-3 p-5 rounded-2xl border-2 transition-all ${userPlatforms.includes(p.id) ? "bg-cyan-500/10 border-cyan-500 text-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.1)]" : "bg-black border-neutral-800 text-neutral-600"}`
+                            }, [
+                                React.createElement('div', { className: "text-xs font-black uppercase tracking-tighter" }, p.name)
+                            ])
                         ))
                     ])
                 ]),
 
-                // Grid
-                React.createElement('div', { key: 'grid', className: "max-w-6xl mx-auto" }, [
-                    loading ? React.createElement('div', { className: "text-center py-20 text-neutral-500" }, "Syncing with catalogs...") :
-                    error ? React.createElement('div', { className: "text-center py-20 text-red-400" }, error) :
-                    React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6" }, filteredMovies.map(movie => 
-                        React.createElement('div', { key: movie.id, className: "flex flex-col bg-neutral-900 rounded-3xl overflow-hidden border border-neutral-800 hover:border-cyan-500/50 transition-all group" }, [
-                            React.createElement('div', { className: "relative h-48 overflow-hidden" }, [
-                                React.createElement('img', { src: movie.backdrop || movie.poster, className: "w-full h-full object-cover transition-transform group-hover:scale-110" }),
-                                React.createElement('div', { className: "absolute inset-0 bg-gradient-to-t from-neutral-900" }),
-                                React.createElement('span', { className: "absolute top-4 left-4 bg-black/80 px-2 py-1 rounded text-[10px] font-bold" }, `${movie.runtime}m`),
-                                React.createElement('h3', { className: "absolute bottom-4 left-4 right-4 text-xl font-black" }, movie.title)
-                            ]),
-                            React.createElement('div', { className: "p-6 flex-grow flex flex-col" }, [
-                                React.createElement('div', { className: "flex justify-between mb-4 text-xs font-bold" }, [
-                                    React.createElement('span', { className: "text-yellow-500" }, `⭐ ${movie.rating}`),
-                                    React.createElement('span', { className: "text-neutral-500" }, movie.year)
+                // Fixed Controls Bar
+                React.createElement('div', { key: 'controls', className: "sticky top-4 z-50 max-w-7xl mx-auto px-4 mb-12" }, [
+                    React.createElement('div', { className: "bg-neutral-900/90 border border-white/10 backdrop-blur-2xl rounded-3xl p-6 md:p-8 shadow-2xl flex flex-col lg:flex-row gap-8 items-center" }, [
+                        // Time Slider
+                        React.createElement('div', { className: "w-full lg:w-1/2" }, [
+                            React.createElement('div', { className: "flex justify-between items-end mb-4" }, [
+                                React.createElement('div', null, [
+                                    React.createElement('span', { className: "text-[10px] font-black text-neutral-500 uppercase tracking-widest" }, "Available Time"),
+                                    React.createElement('div', { className: "text-3xl font-black text-cyan-400" }, `${maxTime} min`)
                                 ]),
-                                React.createElement('p', { className: "text-neutral-400 text-sm line-clamp-3 mb-6" }, movie.description),
-                                React.createElement('button', { className: "mt-auto text-xs font-black text-white hover:text-cyan-400 text-left" }, "VIEW DETAILS →")
+                                React.createElement('div', { className: "text-right" }, [
+                                    React.createElement('span', { className: "text-[10px] font-black text-neutral-500 uppercase tracking-widest" }, "Ends At"),
+                                    React.createElement('div', { className: "text-xl font-mono text-white/60" }, 
+                                        new Date(Date.now() + maxTime * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                    )
+                                ])
+                            ]),
+                            React.createElement('input', {
+                                type: 'range', min: 70, max: 210, step: 5, value: maxTime,
+                                onChange: (e) => setMaxTime(parseInt(e.target.value)),
+                                className: "w-full h-2 bg-neutral-800 rounded-full appearance-none cursor-pointer custom-range"
+                            })
+                        ]),
+                        // Genre Chips
+                        React.createElement('div', { className: "w-full lg:w-1/2 overflow-x-auto pb-2 flex gap-2 no-scrollbar" }, GENRES.map(g => 
+                            React.createElement('button', {
+                                key: g.id,
+                                onClick: () => setSelectedGenre(g.id),
+                                className: `flex-shrink-0 px-6 py-3 rounded-xl text-xs font-black transition-all ${selectedGenre === g.id ? "bg-cyan-500 text-black shadow-lg shadow-cyan-500/20" : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700"}`
+                            }, g.name.toUpperCase())
+                        ))
+                    ])
+                ]),
+
+                // Movie Grid
+                React.createElement('main', { key: 'main', className: "max-w-7xl mx-auto px-4" }, [
+                    loading ? React.createElement('div', { className: "flex flex-col items-center justify-center py-40 text-neutral-500 gap-4" }, [
+                        React.createElement('div', { className: "w-12 h-12 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" }),
+                        React.createElement('p', { className: "font-black text-sm uppercase tracking-widest" }, "Scanning library...")
+                    ]) :
+                    error ? React.createElement('div', { className: "text-center py-40" }, [
+                        React.createElement('p', { className: "text-red-400 text-2xl font-bold mb-4" }, error),
+                        React.createElement('button', { onClick: () => fetchMovies(1), className: "bg-white text-black px-8 py-3 rounded-full font-black" }, "RETRY")
+                    ]) :
+                    React.createElement('div', null, [
+                        React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8" }, filteredByPlatform.map(movie => 
+                            React.createElement('div', { key: movie.id, className: "movie-card relative flex flex-col bg-neutral-900/40 rounded-[2.5rem] overflow-hidden border border-white/5 hover:border-cyan-500/30 group" }, [
+                                // Poster Area
+                                React.createElement('div', { className: "relative h-64 overflow-hidden" }, [
+                                    React.createElement('img', { 
+                                        src: movie.poster || movie.backdrop, 
+                                        className: "w-full h-full object-cover transition-transform duration-700 group-hover:scale-110",
+                                        loading: "lazy"
+                                    }),
+                                    React.createElement('div', { className: "absolute inset-0 bg-gradient-to-t from-neutral-900 via-transparent" }),
+                                    React.createElement('div', { className: "absolute top-4 right-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 flex items-center gap-1.5" }, [
+                                        React.createElement('span', { className: "text-yellow-500 text-xs" }, "★"),
+                                        React.createElement('span', { className: "text-[10px] font-black" }, movie.rating)
+                                    ]),
+                                    React.createElement('div', { className: "absolute bottom-4 left-6" }, [
+                                        React.createElement('span', { className: "bg-cyan-500 text-black px-2 py-0.5 rounded text-[10px] font-black uppercase" }, `${movie.runtime} MIN`)
+                                    ])
+                                ]),
+                                // Content
+                                React.createElement('div', { className: "p-8 flex-grow flex flex-col" }, [
+                                    React.createElement('span', { className: "text-neutral-500 text-[10px] font-black mb-1" }, movie.year),
+                                    React.createElement('h3', { className: "text-xl font-black mb-4 leading-tight group-hover:text-cyan-400 transition-colors" }, movie.title),
+                                    React.createElement('p', { className: "text-neutral-500 text-sm line-clamp-3 leading-relaxed mb-6" }, movie.description),
+                                    React.createElement('div', { className: "mt-auto flex items-center justify-between" }, [
+                                        React.createElement('div', { className: "flex -space-x-1" }, 
+                                            movie.platforms.slice(0, 3).map((_, i) => React.createElement('div', { key: i, className: "w-6 h-6 rounded-full bg-neutral-800 border-2 border-neutral-900" }))
+                                        ),
+                                        React.createElement('button', { className: "text-[10px] font-black tracking-widest uppercase text-white/40 hover:text-cyan-400 transition-colors" }, "Details →")
+                                    ])
+                                ])
                             ])
+                        )),
+                        
+                        // Load More Button
+                        filteredByPlatform.length > 0 && React.createElement('div', { className: "mt-20 flex flex-col items-center gap-6" }, [
+                            React.createElement('p', { className: "text-neutral-600 text-xs font-bold uppercase tracking-widest" }, 
+                                `Showing ${filteredByPlatform.length} movies matching your window`
+                            ),
+                            React.createElement('button', { 
+                                onClick: handleLoadMore,
+                                disabled: loadingMore,
+                                className: "px-12 py-5 rounded-full bg-neutral-900 border border-white/10 hover:border-cyan-500 font-black text-sm tracking-widest transition-all hover:scale-105 disabled:opacity-50"
+                            }, loadingMore ? "EXPANDING LIBRARY..." : "LOAD HUNDREDS MORE")
                         ])
-                    ))
+                    ])
+                ]),
+
+                // Footer
+                React.createElement('footer', { key: 'footer', className: "max-w-7xl mx-auto px-4 mt-40 text-center" }, [
+                    React.createElement('p', { className: "text-neutral-700 text-[10px] font-black uppercase tracking-[0.3em]" }, 
+                        "Data by TMDB • Built for the Precious few hours of sleep we have left"
+                    )
                 ])
             ]);
         }
@@ -217,4 +321,3 @@
     </script>
 </body>
 </html>
-
