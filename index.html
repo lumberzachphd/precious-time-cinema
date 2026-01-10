@@ -12,14 +12,12 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; background-color: black; color: white; }
         
-        /* Smooth scrolling for the whole page */
+        /* Smooth scrolling */
         html { scroll-behavior: smooth; }
 
-        /* Custom scrollbar for a premium look */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #000; }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: #444; }
+        /* Hide scrollbar for clean UI */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
         .custom-range::-webkit-slider-thumb {
             -webkit-appearance: none;
@@ -33,7 +31,7 @@
             box-shadow: 0 0 15px rgba(34, 211, 238, 0.4);
         }
         
-        .movie-card { transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.2s; }
+        .movie-card { transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         .movie-card:hover { transform: translateY(-8px); }
     </style>
 </head>
@@ -41,7 +39,7 @@
     <div id="root"></div>
 
     <script type="text/javascript">
-        const { useState, useEffect, useMemo, useCallback } = React;
+        const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
         // PASTE YOUR TMDB API KEY BETWEEN THE QUOTES BELOW
         const apiKey = "596a0c391f0dbb0641e881ceb9994976"; 
@@ -53,7 +51,8 @@
             { id: 337, name: "Disney+" },
             { id: 1899, name: "Max" },
             { id: 531, name: "Paramount+" },
-            { id: 350, name: "Apple TV" }
+            { id: 350, name: "Apple TV" },
+            { id: 2, name: "Apple Rental" } // Added for better Apple coverage
         ];
 
         const GENRES = [
@@ -72,33 +71,53 @@
         function App() {
             const [maxTime, setMaxTime] = useState(100);
             const [selectedGenre, setSelectedGenre] = useState(0);
-            const [userPlatforms, setUserPlatforms] = useState([8, 15, 9, 337, 1899]);
+            // Default to common ones, but user can change.
+            const [userPlatforms, setUserPlatforms] = useState([8, 15, 9, 337]);
             const [showFilters, setShowFilters] = useState(false);
             const [movies, setMovies] = useState([]);
-            const [page, setPage] = useState(1);
+            
+            // Randomize start page to ensure variety on refresh
+            const [page, setPage] = useState(Math.floor(Math.random() * 5) + 1);
+            
             const [loading, setLoading] = useState(true);
             const [loadingMore, setLoadingMore] = useState(false);
             const [error, setError] = useState(null);
 
-            const fetchMovies = useCallback(async (pageNum = 1, append = false) => {
+            // Debounce ref to prevent spamming API while sliding time
+            const timeoutRef = useRef(null);
+
+            const fetchMovies = useCallback(async (pageNum, append = false) => {
                 if (!apiKey) {
-                    setError("API Key Missing. Please add your TMDB API key to the code.");
+                    setError("API Key Missing. Please edit the index.html file and add your key.");
+                    setLoading(false);
+                    return;
+                }
+
+                if (userPlatforms.length === 0) {
+                    setError("Please select at least one streaming service.");
+                    setMovies([]);
                     setLoading(false);
                     return;
                 }
 
                 try {
                     if (append) setLoadingMore(true); else setLoading(true);
+                    setError(null);
                     
+                    // CORE CHANGE: We filter by provider ON THE SERVER now.
+                    // This ensures we get results for specific apps like Paramount+ instead of filtering generic results to zero.
+                    const providerString = userPlatforms.join('|'); // Pipe means "OR" (Netflix OR Hulu OR...)
+
                     const baseUrl = `https://api.themoviedb.org/3/discover/movie?api_key=${apiKey}`;
                     const params = [
                         `page=${pageNum}`,
                         `with_runtime.lte=${maxTime}`,
-                        `with_runtime.gte=60`,
-                        `vote_count.gte=100`,
+                        `with_runtime.gte=60`, // No shorts
+                        `vote_count.gte=50`,   // Lowered threshold slightly to catch hidden gems
                         `sort_by=popularity.desc`,
                         `watch_region=US`,
-                        `with_watch_monetization_types=flatrate`
+                        `with_watch_monetization_types=flatrate|rent|buy`, // Include rentals if selected
+                        `with_watch_providers=${providerString}` // SERVER SIDE FILTERING
                     ];
 
                     if (selectedGenre !== 0) params.push(`with_genres=${selectedGenre}`);
@@ -107,6 +126,8 @@
                     if (!response.ok) throw new Error('Failed to fetch catalog');
                     const data = await response.json();
                     
+                    // We still need to fetch details to get the specific logo URLs for the cards
+                    // (Discover API doesn't return the logo paths)
                     const detailedMovies = await Promise.all(
                         data.results.map(async (m) => {
                             try {
@@ -114,17 +135,22 @@
                                 const detailRes = await fetch(detailUrl);
                                 const d = await detailRes.json();
                                 
-                                // Strict runtime check: TMDB discover can sometimes include edge cases, 
-                                // so we verify with the actual detailed runtime here.
+                                // Strict runtime check
                                 if (d.runtime > maxTime) return null;
+
+                                // Extract only the providers the user HAS
+                                const allProviders = d['watch/providers']?.results?.US?.flatrate || [];
+                                const rentalProviders = d['watch/providers']?.results?.US?.rent || [];
+                                const combined = [...allProviders, ...rentalProviders];
+                                
+                                // Filter providers to only show logos for services the user actually selected
+                                const myProviders = combined.filter(p => userPlatforms.includes(p.provider_id));
 
                                 return {
                                     id: m.id,
                                     title: m.title,
                                     runtime: d.runtime || 0,
-                                    genreIds: d.genres?.map(g => g.id) || [],
-                                    providers: d['watch/providers']?.results?.US?.flatrate || [],
-                                    platforms: d['watch/providers']?.results?.US?.flatrate?.map(p => p.provider_id) || [],
+                                    providers: myProviders, // For displaying logos
                                     rating: m.vote_average.toFixed(1),
                                     year: m.release_date ? new Date(m.release_date).getFullYear() : 'N/A',
                                     description: m.overview,
@@ -138,20 +164,35 @@
 
                     const validMovies = detailedMovies.filter(m => m !== null);
                     
-                    setMovies(prev => append ? [...prev, ...validMovies] : validMovies);
+                    // Remove duplicates if we are appending
+                    setMovies(prev => {
+                        if (!append) return validMovies;
+                        const newIds = new Set(validMovies.map(m => m.id));
+                        return [...prev, ...validMovies.filter(m => !prev.find(p => p.id === m.id))];
+                    });
+                    
                     setLoading(false);
                     setLoadingMore(false);
                 } catch (err) {
-                    setError("Could not load library. Check your API key or internet.");
+                    setError("Could not load library. Check API key.");
                     setLoading(false);
                     setLoadingMore(false);
                 }
-            }, [maxTime, selectedGenre, apiKey]);
+            }, [maxTime, selectedGenre, userPlatforms, apiKey]);
 
+            // TRIGGER: When filters change, reset page and fetch
             useEffect(() => {
-                setPage(1);
-                fetchMovies(1, false);
-            }, [maxTime, selectedGenre, fetchMovies]);
+                // Debounce sliding time to avoid 50 API calls
+                if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                
+                timeoutRef.current = setTimeout(() => {
+                    const randomStartPage = Math.floor(Math.random() * 3) + 1; // Start at random page 1-3
+                    setPage(randomStartPage);
+                    fetchMovies(randomStartPage, false);
+                }, 500);
+
+                return () => clearTimeout(timeoutRef.current);
+            }, [maxTime, selectedGenre, userPlatforms, fetchMovies]);
 
             const handleLoadMore = () => {
                 const nextPage = page + 1;
@@ -159,59 +200,75 @@
                 fetchMovies(nextPage, true);
             };
 
-            const filteredByPlatform = useMemo(() => {
-                return movies.filter(movie => {
-                    if (movie.platforms.length === 0) return true;
-                    return movie.platforms.some(p => userPlatforms.includes(p));
+            const togglePlatform = (id) => {
+                setUserPlatforms(prev => {
+                    const newPlatforms = prev.includes(id) 
+                        ? prev.filter(x => x !== id) 
+                        : [...prev, id];
+                    return newPlatforms;
                 });
-            }, [movies, userPlatforms]);
+            };
 
-            return React.createElement('div', { className: "min-h-screen pb-20" }, [
+            return React.createElement('div', { className: "min-h-screen pb-20 bg-black text-white" }, [
+                // Background
                 React.createElement('div', { key: 'bg', className: "fixed inset-0 overflow-hidden pointer-events-none -z-10" }, [
-                    React.createElement('div', { className: "absolute -top-1/4 -left-1/4 w-1/2 h-1/2 bg-indigo-900/10 blur-[150px] rounded-full" }),
+                    React.createElement('div', { className: "absolute -top-1/4 -left-1/4 w-1/2 h-1/2 bg-indigo-900/20 blur-[150px] rounded-full" }),
                     React.createElement('div', { className: "absolute bottom-0 right-0 w-1/2 h-1/2 bg-cyan-900/10 blur-[150px] rounded-full" })
                 ]),
 
-                React.createElement('header', { key: 'header', className: "max-w-7xl mx-auto px-4 pt-10 md:pt-16 mb-12" }, [
+                // Header
+                React.createElement('header', { key: 'header', className: "max-w-7xl mx-auto px-4 pt-10 md:pt-16 mb-8" }, [
                     React.createElement('div', { className: "flex flex-col md:flex-row md:items-end justify-between gap-8" }, [
                         React.createElement('div', null, [
                             React.createElement('div', { className: "flex items-center gap-3 mb-4" }, [
                                 React.createElement('span', { className: "bg-cyan-500 text-black px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest" }, "Parent Mode Active")
                             ]),
-                            React.createElement('h1', { className: "text-5xl md:text-7xl font-black tracking-tighter mb-4" }, [
+                            React.createElement('h1', { className: "text-5xl md:text-6xl font-black tracking-tighter mb-4" }, [
                                 "Precious ", React.createElement('span', { className: "text-cyan-400" }, "Time")
                             ]),
-                            React.createElement('p', { className: "text-neutral-400 text-xl max-w-xl leading-relaxed" }, 
-                                "Stop scrolling for hours. Tell us your bedtime, we'll find the movie."
+                            React.createElement('p', { className: "text-neutral-400 text-lg max-w-xl leading-relaxed" }, 
+                                "We now check specific app catalogs to find what you own."
                             )
                         ]),
-                        React.createElement('button', { 
-                            onClick: () => setShowFilters(!showFilters),
-                            className: `group flex items-center gap-2 px-8 py-4 rounded-2xl border-2 font-black transition-all ${showFilters ? "bg-white text-black border-white" : "bg-transparent text-white border-neutral-800 hover:border-cyan-500"}`
-                        }, [
-                            "MY SERVICES",
-                            React.createElement('span', { className: "opacity-50 group-hover:translate-x-1 transition-transform" }, "→")
+                        React.createElement('div', { className: "flex gap-2" }, [
+                            React.createElement('button', { 
+                                onClick: () => {
+                                    const randomPage = Math.floor(Math.random() * 10) + 1;
+                                    setPage(randomPage);
+                                    fetchMovies(randomPage, false);
+                                },
+                                className: "flex items-center gap-2 px-6 py-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-cyan-500 transition-all font-bold text-sm"
+                            }, "🔀 Shuffle"),
+                            React.createElement('button', { 
+                                onClick: () => setShowFilters(!showFilters),
+                                className: `group flex items-center gap-2 px-6 py-4 rounded-2xl border-2 font-black transition-all ${showFilters ? "bg-white text-black border-white" : "bg-transparent text-white border-neutral-800 hover:border-cyan-500"}`
+                            }, [
+                                "MY SERVICES",
+                                React.createElement('span', { className: "bg-neutral-800 text-white px-2 py-0.5 rounded text-xs" }, userPlatforms.length)
+                            ])
                         ])
                     ])
                 ]),
 
+                // Filters
                 showFilters && React.createElement('div', { key: 'platform-overlay', className: "max-w-7xl mx-auto px-4 mb-12 animate-in fade-in slide-in-from-top-4" }, [
                     React.createElement('div', { className: "p-8 rounded-3xl bg-neutral-900/80 border border-neutral-800 backdrop-blur-xl" }, [
-                        React.createElement('h3', { className: "font-bold text-xl mb-6 flex items-center gap-2" }, "Which services do you have?"),
-                        React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-4" }, PLATFORMS.map(p => 
+                        React.createElement('h3', { className: "font-bold text-xl mb-6 text-cyan-400" }, "Select Your Subscriptions"),
+                        React.createElement('div', { className: "grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-4" }, PLATFORMS.map(p => 
                             React.createElement('button', {
                                 key: p.id,
-                                onClick: () => setUserPlatforms(prev => prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]),
-                                className: `flex flex-col items-center gap-3 p-5 rounded-2xl border-2 transition-all ${userPlatforms.includes(p.id) ? "bg-cyan-500/10 border-cyan-500 text-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.1)]" : "bg-black border-neutral-800 text-neutral-600"}`
+                                onClick: () => togglePlatform(p.id),
+                                className: `flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all ${userPlatforms.includes(p.id) ? "bg-cyan-500/10 border-cyan-500 text-cyan-400" : "bg-black border-neutral-800 text-neutral-600 grayscale hover:grayscale-0"}`
                             }, [
-                                React.createElement('div', { className: "text-xs font-black uppercase tracking-tighter" }, p.name)
+                                React.createElement('span', { className: "text-xs font-black uppercase tracking-tighter text-center" }, p.name)
                             ])
                         ))
                     ])
                 ]),
 
+                // Controls
                 React.createElement('div', { key: 'controls', className: "sticky top-4 z-50 max-w-7xl mx-auto px-4 mb-12" }, [
-                    React.createElement('div', { className: "bg-neutral-900/90 border border-white/10 backdrop-blur-2xl rounded-3xl p-6 md:p-8 shadow-2xl flex flex-col lg:flex-row gap-8 items-center" }, [
+                    React.createElement('div', { className: "bg-neutral-900/95 border border-white/10 backdrop-blur-2xl rounded-3xl p-6 shadow-2xl flex flex-col lg:flex-row gap-8 items-center" }, [
                         React.createElement('div', { className: "w-full lg:w-1/2" }, [
                             React.createElement('div', { className: "flex justify-between items-end mb-4" }, [
                                 React.createElement('div', null, [
@@ -219,7 +276,7 @@
                                     React.createElement('div', { className: "text-3xl font-black text-cyan-400" }, `${maxTime} min`)
                                 ]),
                                 React.createElement('div', { className: "text-right" }, [
-                                    React.createElement('span', { className: "text-[10px] font-black text-neutral-500 uppercase tracking-widest" }, "Ends At"),
+                                    React.createElement('span', { className: "text-[10px] font-black text-neutral-500 uppercase tracking-widest" }, "Bedtime"),
                                     React.createElement('div', { className: "text-xl font-mono text-white/60" }, 
                                         new Date(Date.now() + maxTime * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                                     )
@@ -235,23 +292,24 @@
                             React.createElement('button', {
                                 key: g.id,
                                 onClick: () => setSelectedGenre(g.id),
-                                className: `flex-shrink-0 px-6 py-3 rounded-xl text-xs font-black transition-all ${selectedGenre === g.id ? "bg-cyan-500 text-black shadow-lg shadow-cyan-500/20" : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700"}`
+                                className: `flex-shrink-0 px-5 py-3 rounded-xl text-xs font-black transition-all ${selectedGenre === g.id ? "bg-cyan-500 text-black shadow-lg shadow-cyan-500/20" : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700"}`
                             }, g.name.toUpperCase())
                         ))
                     ])
                 ]),
 
+                // Grid
                 React.createElement('main', { key: 'main', className: "max-w-7xl mx-auto px-4" }, [
                     loading ? React.createElement('div', { className: "flex flex-col items-center justify-center py-40 text-neutral-500 gap-4" }, [
                         React.createElement('div', { className: "w-12 h-12 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" }),
-                        React.createElement('p', { className: "font-black text-sm uppercase tracking-widest" }, "Scanning library...")
+                        React.createElement('p', { className: "font-black text-sm uppercase tracking-widest" }, "Searching all apps...")
                     ]) :
                     error ? React.createElement('div', { className: "text-center py-40" }, [
                         React.createElement('p', { className: "text-red-400 text-2xl font-bold mb-4" }, error),
                         React.createElement('button', { onClick: () => fetchMovies(1), className: "bg-white text-black px-8 py-3 rounded-full font-black" }, "RETRY")
                     ]) :
                     React.createElement('div', null, [
-                        React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8" }, filteredByPlatform.map(movie => 
+                        React.createElement('div', { className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8" }, movies.map(movie => 
                             React.createElement('div', { key: movie.id, className: "movie-card relative flex flex-col bg-neutral-900/40 rounded-[2.5rem] overflow-hidden border border-white/5 hover:border-cyan-500/30 group" }, [
                                 React.createElement('div', { className: "relative h-64 overflow-hidden" }, [
                                     React.createElement('img', { 
@@ -268,46 +326,46 @@
                                         React.createElement('span', { className: "bg-cyan-500 text-black px-2 py-0.5 rounded text-[10px] font-black uppercase" }, `${movie.runtime} MIN`)
                                     ])
                                 ]),
-                                React.createElement('div', { className: "p-8 flex-grow flex flex-col" }, [
-                                    React.createElement('span', { className: "text-neutral-500 text-[10px] font-black mb-1" }, movie.year),
-                                    React.createElement('h3', { className: "text-xl font-black mb-4 leading-tight group-hover:text-cyan-400 transition-colors" }, movie.title),
-                                    React.createElement('p', { className: "text-neutral-500 text-sm line-clamp-3 leading-relaxed mb-6" }, movie.description),
+                                React.createElement('div', { className: "p-6 flex-grow flex flex-col" }, [
+                                    React.createElement('div', { className: "flex justify-between items-center mb-2" }, [
+                                        React.createElement('span', { className: "text-neutral-500 text-[10px] font-black" }, movie.year),
+                                    ]),
+                                    React.createElement('h3', { className: "text-lg font-black mb-3 leading-tight group-hover:text-cyan-400 transition-colors" }, movie.title),
+                                    React.createElement('p', { className: "text-neutral-500 text-xs line-clamp-3 leading-relaxed mb-6" }, movie.description),
                                     React.createElement('div', { className: "mt-auto flex items-center justify-between" }, [
-                                        React.createElement('div', { className: "flex -space-x-1.5" }, 
-                                            movie.providers.slice(0, 4).map((p, i) => React.createElement('img', { 
+                                        // Icons Logic
+                                        React.createElement('div', { className: "flex -space-x-2" }, 
+                                            movie.providers.length > 0 ? movie.providers.slice(0, 4).map((p, i) => React.createElement('img', { 
                                                 key: i, 
                                                 src: `https://image.tmdb.org/t/p/original${p.logo_path}`,
                                                 title: p.provider_name,
-                                                className: "w-7 h-7 rounded-lg border-2 border-neutral-900 shadow-lg object-cover"
-                                            }))
+                                                className: "w-8 h-8 rounded-full border-2 border-neutral-900 shadow-lg object-cover bg-neutral-800"
+                                            })) : React.createElement('span', { className: "text-[10px] text-neutral-600" }, "Rent/Buy")
                                         ),
                                         React.createElement('a', { 
                                             href: movie.tmdbUrl,
                                             target: "_blank",
                                             rel: "noopener noreferrer",
                                             className: "text-[10px] font-black tracking-widest uppercase text-white/40 hover:text-cyan-400 transition-colors" 
-                                        }, "Details →")
+                                        }, "Info →")
                                     ])
                                 ])
                             ])
                         )),
                         
-                        filteredByPlatform.length > 0 && React.createElement('div', { className: "mt-20 flex flex-col items-center gap-6" }, [
-                            React.createElement('p', { className: "text-neutral-600 text-xs font-bold uppercase tracking-widest" }, 
-                                `Showing ${filteredByPlatform.length} movies matching your window`
-                            ),
+                        movies.length > 0 && React.createElement('div', { className: "mt-20 flex flex-col items-center gap-6" }, [
                             React.createElement('button', { 
                                 onClick: handleLoadMore,
                                 disabled: loadingMore,
                                 className: "px-12 py-5 rounded-full bg-neutral-900 border border-white/10 hover:border-cyan-500 font-black text-sm tracking-widest transition-all hover:scale-105 disabled:opacity-50"
-                            }, loadingMore ? "EXPANDING LIBRARY..." : "LOAD HUNDREDS MORE")
+                            }, loadingMore ? "LOADING..." : "LOAD MORE")
                         ])
                     ])
                 ]),
 
-                React.createElement('footer', { key: 'footer', className: "max-w-7xl mx-auto px-4 mt-40 text-center" }, [
+                React.createElement('footer', { key: 'footer', className: "max-w-7xl mx-auto px-4 mt-40 text-center pb-10" }, [
                     React.createElement('p', { className: "text-neutral-700 text-[10px] font-black uppercase tracking-[0.3em]" }, 
-                        "Data by TMDB • Built for the Precious few hours of sleep we have left"
+                        "Precious Time Cinema v2.0"
                     )
                 ])
             ]);
