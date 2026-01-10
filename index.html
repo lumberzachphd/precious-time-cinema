@@ -334,12 +334,12 @@
                                     React.createElement('p', { className: "text-neutral-500 text-xs line-clamp-3 leading-relaxed mb-6" }, movie.description),
                                     React.createElement('div', { className: "mt-auto flex items-center justify-between" }, [
                                         // Icons Logic
-                                        React.createElement('div', { className: "flex -space-x-3" }, 
+                                        React.createElement('div', { className: "flex -space-x-4" }, 
                                             movie.providers.length > 0 ? movie.providers.slice(0, 4).map((p, i) => React.createElement('img', { 
                                                 key: i, 
                                                 src: `https://image.tmdb.org/t/p/original${p.logo_path}`,
                                                 title: p.provider_name,
-                                                className: "w-10 h-10 rounded-full border-2 border-neutral-900 shadow-lg object-cover bg-neutral-800"
+                                                className: "w-12 h-12 rounded-full border-2 border-neutral-900 shadow-lg object-cover bg-neutral-800"
                                             })) : React.createElement('span', { className: "text-[10px] text-neutral-600" }, "Rent/Buy")
                                         ),
                                         React.createElement('a', { 
@@ -376,4 +376,5 @@
     </script>
 </body>
 </html>
+
 
